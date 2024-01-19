@@ -1,0 +1,96 @@
+#!/bin/sh
+
+# glpi-scripts
+# Copyright (C) 2023, 2024  Prefeitura Municipal de Campo Largo <analistas@campolargo.pr.gov.br>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+set -e
+
+BASE_DIR=/var/www
+OLD_VERSION=$(ls ${BASE_DIR}/glpi/version)
+NEW_VERSION=$(wget -q https://api.github.com/repos/glpi-project/glpi/releases/latest -O - | grep -m 1 '^  "tag_name": "' | cut -d '"' -f 4)
+
+if [ ${OLD_VERSION} = ${NEW_VERSION} ]; then
+    echo "GLPI ${NEW_VERSION} is already the latest version"
+    exit
+fi
+
+read -p "Updating GLPI ${OLD_VERSION} to ${NEW_VERSION}, proceed? [y/N]" yn
+
+if [ "$yn" != y -a "$yn" != Y ]; then
+    exit 1
+fi
+
+# Prepare new version before entering maintenance mode
+sudo mkdir -p ${BASE_DIR}/tmp/
+sudo chown www-data:www-data ${BASE_DIR}/tmp/
+pushd ${BASE_DIR}/tmp/ > /dev/null
+sudo -u www-data wget -q --show-progress https://github.com/glpi-project/glpi/releases/download/${NEW_VERSION}/glpi-${NEW_VERSION}.tgz
+sudo -u www-data tar -zxf glpi-${NEW_VERSION}.tgz
+sudo -u www-data tee glpi/inc/downstream.php > /dev/null << EOF
+<?php
+define('GLPI_CONFIG_DIR', '/etc/glpi/');
+
+if (file_exists(GLPI_CONFIG_DIR . '/local_define.php')) {
+   require_once GLPI_CONFIG_DIR . '/local_define.php';
+}
+?>
+EOF
+sudo mv glpi/ ../glpi-${NEW_VERSION}/
+popd > /dev/null
+sudo rm -rf ${BASE_DIR}/tmp/
+
+read -p "Entering maintenance mode, proceed? [y/N]" yn
+
+if [ "$yn" != y -a "$yn" != Y ]; then
+    exit 2
+fi
+
+# Enter maintenance mode and backup database
+sudo -u www-data php ${BASE_DIR}/glpi/bin/console glpi:maintenance:enable
+sudo mysqldump -u root -p glpi | sudo tee ${BASE_DIR}/glpi-${OLD_VERSION}.sql > /dev/null
+sudo chown www-data:www-data ${BASE_DIR}/glpi-${OLD_VERSION}.sql
+
+# Restore files from old version
+for dir in config files marketplace plugins; do
+    sudo -u www-data cp -r ${BASE_DIR}/glpi/${dir}/ ${BASE_DIR}/glpi-${NEW_VERSION}/
+done
+
+read -p "Replacing GLPI ${OLD_VERSION} with ${NEW_VERSION}, proceed? [y/N]" yn
+
+if [ "$yn" != y -a "$yn" != Y ]; then
+    exit 3
+fi
+
+# Replace old version with new version
+sudo ln -sfn glpi-${NEW_VERSION} ${BASE_DIR}/glpi
+
+read -p "Leaving maintenance mode, proceed? [y/N]" yn
+
+if [ "$yn" != y -a "$yn" != Y ]; then
+    exit 4
+fi
+
+# Leave maintenance mode
+sudo -u www-data php ${BASE_DIR}/glpi/bin/console glpi:maintenance:disable
+
+read -p "Removing install directory, proceed? [y/N]" yn
+
+if [ "$yn" != y -a "$yn" != Y ]; then
+    exit 5
+fi
+
+# Remove install directory
+sudo -u www-data rm -rf ${BASE_DIR}/glpi/install/
