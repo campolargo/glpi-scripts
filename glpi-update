@@ -48,6 +48,7 @@ if (file_exists(GLPI_CONFIG_DIR . '/local_define.php')) {
 }
 ?>
 EOF
+sudo rm -rf glpi/config/ glpi/files/
 sudo mv glpi/ ../glpi-${NEW_VERSION}/
 popd > /dev/null
 sudo rm -rf ${BASE_DIR}/tmp/
@@ -64,7 +65,7 @@ sudo mysqldump -u root -p glpi | sudo tee ${BASE_DIR}/glpi-${OLD_VERSION}.sql > 
 sudo chown www-data:www-data ${BASE_DIR}/glpi-${OLD_VERSION}.sql
 
 # Restore files from old version
-for dir in config files marketplace plugins; do
+for dir in marketplace plugins; do
     sudo -u www-data cp -r ${BASE_DIR}/glpi/${dir}/ ${BASE_DIR}/glpi-${NEW_VERSION}/
 done
 
