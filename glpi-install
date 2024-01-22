@@ -1,0 +1,138 @@
+#!/bin/bash
+
+# glpi-scripts
+# Copyright (C) 2024  Prefeitura Municipal de Campo Largo <analistas@campolargo.pr.gov.br>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+set -e
+
+# Install dependencies
+sudo apt-get -y install mariadb-server nginx-light php-bz2 php-curl php-fpm php-gd php-intl php-ldap php-mbstring php-mysql php-xml php-zip
+
+# Configure PHP
+PHP_VERSION="$(ls /etc/php)"
+sudo tee /etc/php/$PHP_VERSION/fpm/conf.d/glpi.ini > /dev/null << EOF
+session.cookie_httponly = on
+EOF
+sudo systemctl reload php$PHP_VERSION-fpm
+
+# Configure MariaDB
+sudo mysql_secure_installation << EOF
+
+y
+n
+y
+y
+y
+y
+EOF
+mysql_tzinfo_to_sql /usr/share/zoneinfo | sudo mysql mysql
+DB_PASSWORD="$(openssl rand -base64 32)"
+echo 'Database password is:'
+echo "$DB_PASSWORD"
+sudo mysql << EOF
+create database glpi;
+create user 'glpi'@'localhost' identified by '$DB_PASSWORD';
+grant all privileges on glpi.* to 'glpi'@'localhost';
+grant select on mysql.time_zone_name to 'glpi'@'localhost';
+flush privileges;
+EOF
+unset DB_PASSWORD
+
+# Configure nginx
+sudo rm /etc/nginx/sites-enabled/default
+sudo tee /etc/nginx/conf.d/glpi.conf > /dev/null << EOF
+server {
+    listen 80;
+    listen [::]:80;
+
+    server_name glpi.localhost;
+
+    root /var/www/glpi/public;
+
+    location / {
+        try_files \$uri /index.php\$is_args\$args;
+    }
+
+    location ~ ^/index\.php$ {
+        # the following line needs to be adapted, as it changes depending on OS distributions and PHP versions
+        fastcgi_pass unix:/run/php/php-fpm.sock;
+
+        fastcgi_split_path_info ^(.+\.php)(/.*)$;
+        include fastcgi_params;
+
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+    }
+}
+EOF
+sudo systemctl reload nginx
+
+BASE_DIR=/var/www
+VERSION=$(wget -q https://api.github.com/repos/glpi-project/glpi/releases/latest -O - | grep -m 1 '^  "tag_name": "' | cut -d '"' -f 4)
+
+# Prepare current version
+sudo mkdir -p ${BASE_DIR}/tmp/
+sudo chown www-data:www-data ${BASE_DIR}/tmp/
+pushd ${BASE_DIR}/tmp/ > /dev/null
+sudo -u www-data wget -q --show-progress https://github.com/glpi-project/glpi/releases/download/${VERSION}/glpi-${VERSION}.tgz
+sudo -u www-data tar -zxf glpi-${VERSION}.tgz
+sudo -u www-data tee glpi/inc/downstream.php > /dev/null << EOF
+<?php
+define('GLPI_CONFIG_DIR', '/etc/glpi/');
+
+if (file_exists(GLPI_CONFIG_DIR . '/local_define.php')) {
+   require_once GLPI_CONFIG_DIR . '/local_define.php';
+}
+?>
+EOF
+sudo -u www-data tee glpi/config/local_define.php > /dev/null << EOF
+<?php
+define('GLPI_VAR_DIR', '/var/lib/glpi');
+define('GLPI_LOG_DIR', '/var/log/glpi');
+?>
+EOF
+sudo mv glpi/ ../glpi-${VERSION}/
+popd > /dev/null
+sudo rm -rf ${BASE_DIR}/tmp/
+
+# Point glpi to current version
+sudo ln -s glpi-${VERSION} ${BASE_DIR}/glpi
+
+# Install glpi
+sudo mv ${BASE_DIR}/glpi/config /etc/glpi
+sudo mv ${BASE_DIR}/glpi/files /var/lib/glpi
+sudo mkdir /var/log/glpi
+sudo chown www-data:www-data /var/log/glpi
+echo 'Access the Web interface to complete installation'
+
+read -p 'Finishing installation, proceed? [y/N]' yn
+
+if [ "$yn" != y -a "$yn" != Y ]; then
+    exit
+fi
+
+# Remove install directory
+sudo rm -rf ${BASE_DIR}/glpi/install/
+
+# Enable timezones
+sudo -u www-data php ${BASE_DIR}/glpi/bin/console database:enable_timezones
+
+# Make configuration read-only
+sudo chmod -R a-w /etc/glpi/
+
+# Configure cronjob for automatic actions
+sudo tee /etc/cron.d/glpi > /dev/null << EOF
+* * * * * www-data php /var/www/glpi/front/cron.php
+EOF
