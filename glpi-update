@@ -61,7 +61,7 @@ fi
 
 # Enter maintenance mode and backup database
 sudo -u www-data php ${BASE_DIR}/glpi/bin/console glpi:maintenance:enable
-sudo mysqldump -u root -p glpi | sudo tee ${BASE_DIR}/glpi-${OLD_VERSION}.sql > /dev/null
+sudo mysqldump -u root glpi | sudo tee ${BASE_DIR}/glpi-${OLD_VERSION}.sql > /dev/null
 sudo chown www-data:www-data ${BASE_DIR}/glpi-${OLD_VERSION}.sql
 
 # Restore files from old version
