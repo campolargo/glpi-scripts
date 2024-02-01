@@ -78,10 +78,19 @@ fi
 # Replace old version with new version
 sudo ln -sfn glpi-${NEW_VERSION} ${BASE_DIR}/glpi
 
-read -p "Leaving maintenance mode, proceed? [y/N]" yn
+read -p "Updating database, proceed? [y/N]" yn
 
 if [ "$yn" != y -a "$yn" != Y ]; then
     exit 4
+fi
+
+# Update database
+sudo -u www-data php ${BASE_DIR}/glpi/bin/console db:update
+
+read -p "Leaving maintenance mode, proceed? [y/N]" yn
+
+if [ "$yn" != y -a "$yn" != Y ]; then
+    exit 5
 fi
 
 # Leave maintenance mode
@@ -90,7 +99,7 @@ sudo -u www-data php ${BASE_DIR}/glpi/bin/console glpi:maintenance:disable
 read -p "Removing install directory, proceed? [y/N]" yn
 
 if [ "$yn" != y -a "$yn" != Y ]; then
-    exit 5
+    exit 6
 fi
 
 # Remove install directory
