@@ -19,6 +19,7 @@
 set -e
 
 BASE_DIR=/var/www
+PHP_VERSION="$(ls /etc/php)"
 OLD_VERSION=$(ls ${BASE_DIR}/glpi/version)
 NEW_VERSION=$(wget -q https://api.github.com/repos/glpi-project/glpi/releases/latest -O - | grep -m 1 '^  "tag_name": "' | cut -d '"' -f 4)
 
@@ -77,6 +78,7 @@ fi
 
 # Replace old version with new version
 sudo ln -sfn glpi-${NEW_VERSION} ${BASE_DIR}/glpi
+sudo systemctl restart cron nginx php$PHP_VERSION-fpm
 
 read -p "Updating database, proceed? [y/N]" yn
 
